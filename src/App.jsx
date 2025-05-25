@@ -17,8 +17,8 @@
     import SplashScreenComponent from '@/components/SplashScreen.jsx';
     import { AnimatePresence } from 'framer-motion';
 
-    function ProtectedRoute({ children, adminOnly = false, managerOnly = false }) {
-      const { isAuthenticated, user, isAdmin, isManager, loading, showProfileCompletionModal } = useAuth(); 
+    function ProtectedRoute({ children, adminOnly = false }) {
+      const { isAuthenticated, user, isAdmin, loading, showProfileCompletionModal } = useAuth(); 
       const location = useReactRouterLocation();
       
       if (loading) { 
@@ -39,10 +39,6 @@
       if (adminOnly && !isAdmin) {
         return <Navigate to="/" replace />;
       }
-
-      if (managerOnly && !isManager) { // Check for manager role if managerOnly is true
-        return <Navigate to="/apostas" replace />;
-      }
       
       return children;
     }
@@ -62,7 +58,7 @@
             />
             <Route 
               path="/criar-aposta" 
-              element={<ProtectedRoute managerOnly={true}><CreateBetPage /></ProtectedRoute>}
+              element={<ProtectedRoute><CreateBetPage /></ProtectedRoute>}
             />
             <Route 
               path="/perfil" 

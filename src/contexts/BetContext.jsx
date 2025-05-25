@@ -13,7 +13,8 @@
       endBetInSupabase,
       getBetByIdFromSupabase,
       getUserBetsFromSupabase,
-      confirmParticipantPaymentInSupabase
+      confirmParticipantPaymentInSupabase,
+      hasUserBetOnBet as checkUserBet
     } from '@/lib/betService.js';
 
     const BetContext = createContext(null);
@@ -24,12 +25,11 @@
       const { toast } = useToast();
       const { user } = useAuth();
 
-      const fetchBets = useCallback(async () => {
+      const fetchBets = useCallback(async (filters = { is_public: true }) => {
         setLoading(true);
         try {
-          const data = await fetchBetsFromSupabase();
-          const transformedBets = data.map(transformBetData);
-          setBets(transformedBets || []);
+          const data = await fetchBetsFromSupabase(filters);
+          setBets(data || []);
         } catch (error) {
           console.error("Error fetching bets:", error);
           toast({ variant: "destructive", title: "Erro ao buscar apostas", description: error.message });
@@ -40,7 +40,7 @@
       }, [toast]);
 
       useEffect(() => {
-        fetchBets();
+        fetchBets({ is_public: true }); // Fetch only public bets initially
       }, [fetchBets]);
       
       const addBet = async (newBetData) => {
@@ -51,12 +51,10 @@
         setLoading(true);
         try {
           const newBet = await addBetToSupabase(newBetData, user.id);
-          const transformedNewBet = transformBetData(newBet);
-          transformedNewBet.apostadores = []; 
-
-          setBets(prevBets => [transformedNewBet, ...prevBets].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+          
+          setBets(prevBets => [newBet, ...prevBets].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
           toast({ title: "Sucesso!", description: "Aposta criada." });
-          return transformedNewBet;
+          return newBet;
         } catch (error) {
           console.error("Error creating bet:", error);
           toast({ variant: "destructive", title: "Erro ao criar aposta", description: error.message });
@@ -67,13 +65,16 @@
       };
       
       const updateBet = async (betId, updatedBetData) => {
+        if (!user) {
+          toast({ variant: "destructive", title: "Erro", description: "Você precisa estar logado para atualizar uma aposta." });
+          return null;
+        }
         setLoading(true);
         try {
-          const updatedBet = await updateBetInSupabase(betId, updatedBetData);
-          const transformedUpdatedBet = transformBetData(updatedBet);
-          setBets(prevBets => prevBets.map(b => (b.id === betId ? transformedUpdatedBet : b)).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+          const updatedBet = await updateBetInSupabase(betId, updatedBetData, user.id);
+          setBets(prevBets => prevBets.map(b => (b.id === betId ? updatedBet : b)).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
           toast({ title: "Sucesso!", description: "Aposta atualizada." });
-          return transformedUpdatedBet;
+          return updatedBet;
         } catch (error) {
           console.error("Error updating bet:", error);
           toast({ variant: "destructive", title: "Erro ao atualizar aposta", description: error.message });
@@ -107,9 +108,8 @@
         setLoading(true);
         try {
           const { newParticipant, updatedBetData } = await placeBetInSupabase(betId, user.id, chosenOptionValue, amount, paymentMethod);
-          const transformedBet = transformBetData(updatedBetData);
           
-          setBets(prevBets => prevBets.map(b => (b.id === betId ? transformedBet : b)).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+          setBets(prevBets => prevBets.map(b => (b.id === betId ? updatedBetData : b)).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
           toast({ title: "Aposta Confirmada!", description: `Você apostou R$ ${amount} em ${chosenOptionValue}.` });
           return { ...newParticipant, profile: newParticipant.profiles };
 
@@ -126,10 +126,9 @@
         setLoading(true);
         try {
           const updatedBet = await endBetInSupabase(betId, winningOptionValue, resultDescription);
-          const transformedBet = transformBetData(updatedBet);
-          setBets(prevBets => prevBets.map(b => (b.id === betId ? transformedBet : b)).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
+          setBets(prevBets => prevBets.map(b => (b.id === betId ? updatedBet : b)).sort((a, b) => new Date(b.created_at) - new Date(a.created_at)));
           toast({ title: "Aposta Encerrada!", description: `O resultado foi: ${winningOptionValue}.` });
-          return transformedBet;
+          return updatedBet;
         } catch (error) {
           console.error("Error ending bet:", error);
           toast({ variant: "destructive", title: "Erro ao encerrar aposta", description: error.message });
@@ -147,18 +146,17 @@
             toast({ variant: "destructive", title: "Aposta não encontrada", description: "Não foi possível carregar os dados desta aposta." });
             return null;
           }
-
-          const transformedBet = transformBetData(data);
+          
           setBets(prev => {
             const index = prev.findIndex(b => b.id === id);
             if (index !== -1) {
               const newBets = [...prev];
-              newBets[index] = transformedBet;
+              newBets[index] = data;
               return newBets.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
             }
-            return [...prev, transformedBet].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); 
+            return [...prev, data].sort((a, b) => new Date(b.created_at) - new Date(a.created_at)); 
           });
-          return transformedBet;
+          return data;
 
         } catch (error) {
           console.error(`Error fetching bet by ID ${id}:`, error);
@@ -174,7 +172,7 @@
         setLoading(true);
         try {
           const combined = await getUserBetsFromSupabase(userId);
-          return combined.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+          return combined;
         } catch (error) {
           console.error("Error fetching user bets:", error);
           toast({ variant: "destructive", title: "Erro ao buscar suas apostas", description: error.message });
@@ -190,6 +188,7 @@
             const success = await confirmParticipantPaymentInSupabase(participantId);
             if (success) {
                 toast({ title: "Pagamento Confirmado", description: "Status do participante atualizado." });
+                // Optionally, refresh the specific bet data here
                 return true;
             }
             return false;
@@ -202,8 +201,18 @@
         }
       };
 
+      const hasUserBet = useCallback(async (userId, betId) => {
+        if (!userId || !betId) return false;
+        try {
+          return await checkUserBet(userId, betId);
+        } catch (error) {
+          console.error("Error checking user bet status:", error);
+          return false;
+        }
+      }, []);
 
-      if (loading && bets.length === 0) { 
+
+      if (loading && bets.length === 0 && !user) { 
         return (
           <div className="flex items-center justify-center min-h-screen bg-background">
             <div className="p-4 rounded-lg">
@@ -225,7 +234,8 @@
           updateBet, 
           deleteBet, 
           loadingBets: loading,
-          confirmParticipantPayment
+          confirmParticipantPayment,
+          hasUserBet
         }}>
           {children}
         </BetContext.Provider>

@@ -56,7 +56,7 @@
           await processUserSession(session?.user || null);
         } catch (error) {
           console.error("AuthContext: Error in refreshAuthStatus:", error);
-          await processUserSession(null); // Ensure clean state on error
+          await processUserSession(null); 
         } finally {
           setLoading(false);
         }
@@ -89,12 +89,14 @@
           const sessionUser = session?.user || null;
           const processedUser = await processUserSession(sessionUser);
 
-          if (event === 'SIGNED_IN') {
-            if (processedUser && !processedUser.name && !processedUser.pix_key) {
-              // Modal will be shown, no navigation needed here
-            } else if (processedUser) {
+          if (event === 'SIGNED_IN' || event === 'USER_UPDATED' || event === 'TOKEN_REFRESHED') {
+            if (processedUser && !processedUser.name && !processedUser.pix_key && location.pathname !== '/perfil') {
+              // Modal will be shown by showProfileCompletionModal state
+            } else if (processedUser && (processedUser.name && processedUser.pix_key)) {
               const from = location.state?.from?.pathname || '/apostas'; 
-              navigate(from, { replace: true });
+              if (location.pathname === '/auth' || location.pathname === '/') {
+                navigate(from, { replace: true });
+              }
             }
           } else if (event === 'SIGNED_OUT') {
             navigate('/auth', { replace: true });
@@ -107,7 +109,7 @@
             authListener.subscription.unsubscribe();
           }
         };
-      }, [processUserSession, navigate, location, initialCheckDone]);
+      }, [processUserSession, navigate, location.state, location.pathname, initialCheckDone]);
 
 
       const signInWithMagicLink = async (email) => {
@@ -117,6 +119,7 @@
             email,
             options: {
               emailRedirectTo: redirectTo,
+              shouldCreateUser: true,
             },
           });
           if (error) throw error;
@@ -126,6 +129,25 @@
           return false;
         }
       };
+      
+      const verifyOtpCode = async (email, token) => {
+        try {
+          const { data, error } = await supabase.auth.verifyOtp({
+            email,
+            token,
+            type: 'magiclink', 
+          });
+          if (error) throw error;
+          if (data.session) {
+             await processUserSession(data.session.user);
+          }
+          return { session: data.session, error: null };
+        } catch (error) {
+          console.error('Error verifying OTP:', error);
+          return { session: null, error };
+        }
+      };
+
 
       const logout = async () => {
         try {
@@ -158,6 +180,7 @@
         isAuthenticated: !!user && !showProfileCompletionModal, 
         loading: loading && !initialCheckDone, 
         signInWithMagicLink,
+        verifyOtpCode,
         logout,
         updateProfile, 
         showProfileCompletionModal,

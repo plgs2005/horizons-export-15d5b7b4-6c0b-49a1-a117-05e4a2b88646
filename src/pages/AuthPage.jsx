@@ -8,16 +8,18 @@
     import { useAuth } from '@/contexts/AuthContext.jsx';
     import { useToast } from '@/components/ui/use-toast';
     import { motion } from 'framer-motion';
-    import { Mail, LogIn, Loader2, RefreshCw } from 'lucide-react';
+    import { Mail, LogIn, Loader2, RefreshCw, KeyRound } from 'lucide-react';
 
     const RESEND_COOLDOWN_SECONDS = 60;
 
     const AuthPage = () => {
       const navigate = useNavigate();
-      const { signInWithMagicLink, isAuthenticated, loading, user, refreshAuthStatus } = useAuth();
+      const { signInWithMagicLink, verifyOtpCode, isAuthenticated, loading, user, refreshAuthStatus } = useAuth();
       const { toast } = useToast();
       const [email, setEmail] = useState('');
-      const [isSubmitting, setIsSubmitting] = useState(false);
+      const [otp, setOtp] = useState('');
+      const [isSubmittingEmail, setIsSubmittingEmail] = useState(false);
+      const [isVerifyingOtp, setIsVerifyingOtp] = useState(false);
       const [magicLinkSent, setMagicLinkSent] = useState(false);
       const [resendCooldown, setResendCooldown] = useState(0);
       const [lastSentEmail, setLastSentEmail] = useState('');
@@ -69,7 +71,7 @@
           return;
         }
         
-        setIsSubmitting(true);
+        setIsSubmittingEmail(true);
         if (!isResend) setMagicLinkSent(false); 
 
         try {
@@ -81,6 +83,10 @@
             if (!isResend) {
                setEmail(''); 
             }
+            toast({
+              title: "Link Mágico Enviado!",
+              description: `Um link e código de acesso foram enviados para ${emailToUse}.`,
+            });
           } else {
             toast({
               variant: "destructive",
@@ -96,7 +102,50 @@
             description: "Ocorreu um erro. Por favor, tente novamente."
           });
         } finally {
-          setIsSubmitting(false);
+          setIsSubmittingEmail(false);
+        }
+      };
+
+      const handleVerifyOtp = async (e) => {
+        e.preventDefault();
+        if (!otp || otp.length !== 6) {
+          toast({
+            variant: "destructive",
+            title: "Código Inválido",
+            description: "Por favor, insira o código de 6 dígitos recebido por email.",
+          });
+          return;
+        }
+        setIsVerifyingOtp(true);
+        try {
+          const { session, error } = await verifyOtpCode(lastSentEmail, otp);
+          if (error) {
+            toast({
+              variant: "destructive",
+              title: "Falha na Verificação",
+              description: error.message || "Código inválido ou expirado. Tente novamente.",
+            });
+          } else if (session) {
+             // AuthContext's onAuthStateChange will handle navigation
+             toast({
+              title: "Login Bem-sucedido!",
+              description: "Você foi autenticado com sucesso.",
+            });
+          } else {
+            toast({
+              variant: "destructive",
+              title: "Falha na Verificação",
+              description: "Não foi possível verificar o código. Tente novamente.",
+            });
+          }
+        } catch (error) {
+            toast({
+              variant: "destructive",
+              title: "Erro Inesperado",
+              description: "Ocorreu um erro ao verificar o código.",
+            });
+        } finally {
+          setIsVerifyingOtp(false);
         }
       };
       
@@ -131,15 +180,15 @@
               </CardTitle>
               {!magicLinkSent ? (
                 <CardDescription className="text-gray-600">
-                  Insira seu email para receber um link mágico de acesso.
+                  Insira seu email para receber um link mágico e código de acesso.
                 </CardDescription>
               ) : (
                 <CardDescription className="text-green-600 font-semibold">
-                  Link mágico enviado para {lastSentEmail}! Verifique sua caixa de entrada (e spam).
+                  Acesso enviado para {lastSentEmail}! Verifique sua caixa de entrada (e spam).
                 </CardDescription>
               )}
             </CardHeader>
-            {!magicLinkSent && (
+            {!magicLinkSent ? (
               <form onSubmit={handleMagicLinkLogin}>
                 <CardContent className="space-y-6">
                   <div className="space-y-2">
@@ -154,7 +203,7 @@
                         onChange={(e) => setEmail(e.target.value)} 
                         required 
                         className="pl-10 w-full border-gray-300 focus:border-slate-500 focus:ring-slate-500 rounded-md shadow-sm"
-                        disabled={isSubmitting}
+                        disabled={isSubmittingEmail}
                       />
                     </div>
                   </div>
@@ -163,33 +212,64 @@
                   <Button 
                     type="submit" 
                     className="w-full bg-gradient-to-r from-slate-600 to-gray-700 hover:from-slate-700 hover:to-gray-800 text-white font-semibold py-3 rounded-md shadow-lg transform transition-all hover:scale-105"
-                    disabled={isSubmitting || (loading && !user)}
+                    disabled={isSubmittingEmail || (loading && !user)}
                   >
-                    {isSubmitting ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Enviando...</>) : "Enviar Link Mágico"}
+                    {isSubmittingEmail ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Enviando...</>) : "Enviar Link e Código"}
                   </Button>
                 </CardFooter>
               </form>
-            )}
-             {magicLinkSent && (
-              <CardContent className="text-center space-y-4">
-                <p className="text-gray-700">
-                  Você pode fechar esta aba. O login será completado ao clicar no link em seu email.
-                </p>
-                {resendCooldown > 0 ? (
-                  <p className="text-sm text-muted-foreground">
-                    Não recebeu o email? Reenviar em {resendCooldown}s
+            ) : (
+              <>
+                <form onSubmit={handleVerifyOtp}>
+                  <CardContent className="space-y-6">
+                    <div className="space-y-2">
+                      <Label htmlFor="otp-code" className="text-gray-700 font-medium">Código de Acesso (OTP)</Label>
+                      <div className="relative flex items-center">
+                        <KeyRound className="absolute left-3 h-5 w-5 text-gray-400" />
+                        <Input 
+                          id="otp-code" 
+                          type="text" 
+                          inputMode="numeric"
+                          pattern="\d{6}"
+                          maxLength="6"
+                          placeholder="123456" 
+                          value={otp} 
+                          onChange={(e) => setOtp(e.target.value.replace(/\D/g, '').slice(0,6))} 
+                          required 
+                          className="pl-10 w-full border-gray-300 focus:border-slate-500 focus:ring-slate-500 rounded-md shadow-sm tracking-[0.3em]"
+                          disabled={isVerifyingOtp}
+                        />
+                      </div>
+                    </div>
+                     <Button 
+                        type="submit" 
+                        className="w-full bg-gradient-to-r from-green-600 to-emerald-700 hover:from-green-700 hover:to-emerald-800 text-white font-semibold py-3 rounded-md shadow-lg transform transition-all hover:scale-105"
+                        disabled={isVerifyingOtp || !otp || otp.length !== 6}
+                      >
+                        {isVerifyingOtp ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Verificando...</>) : "Verificar Código"}
+                      </Button>
+                  </CardContent>
+                </form>
+                <CardFooter className="flex-col space-y-2 items-center">
+                  <p className="text-sm text-gray-700">
+                    Ou clique no link enviado ao seu email.
                   </p>
-                ) : (
-                  <Button 
-                    variant="outline" 
-                    onClick={() => handleMagicLinkLogin(null, true)} 
-                    disabled={isSubmitting}
-                    className="w-full"
-                  >
-                    {isSubmitting ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Reenviando...</>) : (<><RefreshCw className="mr-2 h-4 w-4" /> Reenviar Link</>)}
-                  </Button>
-                )}
-              </CardContent>
+                  {resendCooldown > 0 ? (
+                    <p className="text-xs text-muted-foreground">
+                      Não recebeu? Reenviar em {resendCooldown}s
+                    </p>
+                  ) : (
+                    <Button 
+                      variant="outline" 
+                      onClick={() => handleMagicLinkLogin(null, true)} 
+                      disabled={isSubmittingEmail}
+                      className="w-full text-sm"
+                    >
+                      {isSubmittingEmail ? (<><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Reenviando...</>) : (<><RefreshCw className="mr-2 h-4 w-4" /> Reenviar Link e Código</>)}
+                    </Button>
+                  )}
+                </CardFooter>
+              </>
             )}
           </Card>
         </motion.div>

@@ -15,7 +15,11 @@
             parsedOptions = bet.options; 
           }
           if (!Array.isArray(parsedOptions)) {
-            parsedOptions = [];
+            parsedOptions = []; 
+          } else {
+            parsedOptions = parsedOptions.map(opt => 
+              typeof opt === 'string' ? { name: opt, value: opt } : (opt && typeof opt === 'object' ? opt : { name: String(opt), value: String(opt) })
+            );
           }
         } catch (e) {
           console.error("Error parsing bet options:", e, "Options received:", bet.options);
@@ -25,11 +29,11 @@
 
       return {
         ...bet,
-        options: parsedOptions.map(opt => (typeof opt === 'string' ? { name: opt, value: opt } : opt)),
+        options: parsedOptions,
         manager_email: managerProfile?.email,
         manager_name: managerProfile?.name || managerProfile?.apelido || 'Desconhecido',
         manager_avatar_url: managerProfile?.avatar_url,
-        created_by: bet.created_by, // Ensure created_by (user_id) is passed through
+        created_by: bet.created_by, 
         participants_count: bet.apostadores?.length || bet.participants_count || 0,
         prize_pool: bet.apostadores?.reduce((sum, p) => sum + (p.valor_apostado || 0), 0) || bet.prize_pool || 0,
         apostadores: bet.apostadores?.map(ap => ({
@@ -39,8 +43,8 @@
       };
     };
 
-    export const fetchBetsFromSupabase = async () => {
-      const { data, error } = await supabase
+    export const fetchBetsFromSupabase = async (filters = {}) => {
+      let query = supabase
         .from('bets')
         .select(`
           *,
@@ -57,21 +61,48 @@
         `)
         .order('created_at', { ascending: false });
 
+      if (filters.is_public !== undefined) {
+        query = query.eq('is_public', filters.is_public);
+      }
+      if (filters.status) {
+        query = query.eq('status', filters.status);
+      }
+      if (filters.category) {
+        query = query.eq('category', filters.category);
+      }
+      
+      const { data, error } = await query;
+
       if (error) {
         console.error("Fetch error from fetchBetsFromSupabase:", error.message);
         throw error;
       }
-      return data || [];
+      return data ? data.map(transformBetData) : [];
     };
 
     export const addBetToSupabase = async (newBetData, userId) => {
+      const { data: userProfile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', userId)
+        .single();
+
+      const isUserAdmin = userProfile?.role === 'admin';
+      
+      const finalIsPublic = isUserAdmin ? newBetData.is_public : false;
+      const finalAccessCode = finalIsPublic ? null : newBetData.private_access_code;
+
       const betPayload = {
         ...newBetData,
         created_by: userId,
         status: 'Aberta', 
         participants_count: 0,
         prize_pool: 0,
-        options: JSON.stringify(newBetData.options) 
+        options: JSON.stringify(newBetData.options.map(opt => ({name: opt.name || opt.value, value: opt.value || opt.name }))),
+        is_public: finalIsPublic, 
+        private_access_code: finalAccessCode,
+        image_url: newBetData.image_url || null,
+        max_participants: newBetData.max_participants || null,
       };
       
       const { data: newBet, error } = await supabase
@@ -84,17 +115,40 @@
         .single();
 
       if (error) {
-        console.error("Fetch error from addBetToSupabase:", error.message);
+        console.error("Fetch error from addBetToSupabase:", error.message, "Payload:", betPayload);
         throw error;
       }
-      return newBet;
+      return transformBetData(newBet);
     };
 
-    export const updateBetInSupabase = async (betId, updatedBetData) => {
+    export const updateBetInSupabase = async (betId, updatedBetData, userId) => {
+      const { data: userProfile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('id', userId)
+        .single();
+      const isUserAdmin = userProfile?.role === 'admin';
+
       const payload = { ...updatedBetData };
       if (payload.options && Array.isArray(payload.options)) {
-        payload.options = JSON.stringify(payload.options);
+        payload.options = JSON.stringify(payload.options.map(opt => ({name: opt.name || opt.value, value: opt.value || opt.name })));
       }
+      
+      if (!isUserAdmin && payload.hasOwnProperty('is_public')) {
+        // Non-admins cannot change publicity. If the bet is already private, it stays private.
+        // If they somehow try to make it public, this ensures it's ignored or forced to false.
+        // For simplicity, we can fetch the current bet's is_public status or just disallow change.
+        // The RLS policy will be the ultimate enforcer.
+        // Here, we ensure that if is_public is in payload from non-admin, it's set to false.
+        payload.is_public = false; 
+      }
+      
+      if (payload.is_public === true) { // If admin makes it public
+        payload.private_access_code = null;
+      } else if (payload.is_public === false && !payload.private_access_code) { // If admin makes it private and no code provided
+         payload.private_access_code = Math.random().toString(36).substring(2, 8).toUpperCase();
+      }
+
 
       const { data: updatedBet, error } = await supabase
         .from('bets')
@@ -116,10 +170,10 @@
         .single();
       
       if (error) {
-        console.error("Fetch error from updateBetInSupabase:", error.message);
+        console.error("Fetch error from updateBetInSupabase:", error.message, "Payload:", payload);
         throw error;
       }
-      return updatedBet;
+      return transformBetData(updatedBet);
     };
 
     export const deleteBetFromSupabase = async (betId) => {
@@ -184,7 +238,7 @@
         console.error("Fetch error from placeBetInSupabase (updatedBetData):", fetchError.message);
         throw fetchError;
       }
-      return { newParticipant, updatedBetData };
+      return { newParticipant, updatedBetData: transformBetData(updatedBetData) };
     };
 
     export const endBetInSupabase = async (betId, winningOptionValue, resultDescription) => {
@@ -216,7 +270,7 @@
         console.error("Fetch error from endBetInSupabase:", error.message);
         throw error;
       }
-      return updatedBet;
+      return transformBetData(updatedBet);
     };
 
     export const getBetByIdFromSupabase = async (id) => {
@@ -237,11 +291,11 @@
         `)
         .eq('id', id)
         .single();
-      if (error && error.code !== 'PGRST116') { // PGRST116: "Searched item was not found" - not a critical error, just means no bet with that ID
+      if (error && error.code !== 'PGRST116') { 
         console.error("Fetch error from getBetByIdFromSupabase:", error.message);
         throw error;
       }
-      return data; // Can be null if not found, which is fine
+      return transformBetData(data); 
     };
 
     export const getUserBetsFromSupabase = async (userId) => {
@@ -292,7 +346,7 @@
       
       const transformedManagedBets = managedBetsData.map(bet => ({
         ...transformBetData(bet),
-        is_manager: true
+        is_manager: true 
       }));
       
       const combined = [...userPlacedBets];
@@ -307,7 +361,7 @@
         }
       });
       
-      return combined;
+      return combined.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
     };
 
     export const confirmParticipantPaymentInSupabase = async (participantId) => {
@@ -323,5 +377,20 @@
             throw error;
         }
         return data;
+    };
+
+    export const hasUserBetOnBet = async (userId, betId) => {
+      const { data, error, count } = await supabase
+        .from('apostadores')
+        .select('id', { count: 'exact', head: true })
+        .eq('usuario_id', userId)
+        .eq('aposta_id', betId)
+        .eq('status', 'pago'); 
+    
+      if (error) {
+        console.error('Error checking if user has bet:', error);
+        return false; 
+      }
+      return count > 0;
     };
   

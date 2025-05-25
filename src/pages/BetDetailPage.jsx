@@ -4,6 +4,7 @@
     import { useBets } from '@/contexts/BetContext.jsx';
     import { useAuth } from '@/contexts/AuthContext.jsx';
     import { useToast } from '@/components/ui/use-toast';
+    import { supabase } from '@/lib/supabase.jsx';
     
     import BetDetailHeader from '@/components/bet-detail-parts/BetDetailHeader.jsx';
     import BetInfoGrid from '@/components/bet-detail-parts/BetInfoGrid.jsx';
@@ -14,10 +15,11 @@
     import LoadingBetDetail from '@/components/bet-detail-parts/LoadingBetDetail.jsx';
     import BetShareModal from '@/components/bets/BetShareModal.jsx';
     import BetManagerActions from '@/components/bet-detail-parts/BetManagerActions.jsx';
+    import PixPaymentModal from '@/components/PixPaymentModal.jsx';
     
     import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
     import { Button } from "@/components/ui/button";
-    import { Terminal, Share2 } from "lucide-react";
+    import { Terminal, Share2, Loader2 } from "lucide-react";
     
     const BetDetailPage = () => {
       const { id: betId } = useParams();
@@ -34,6 +36,10 @@
       const [betAmount, setBetAmount] = useState(0);
       const [showShareModal, setShowShareModal] = useState(false);
       const [isConfirmingPayment, setIsConfirmingPayment] = useState(false);
+
+      const [showPixModal, setShowPixModal] = useState(false);
+      const [pixChargeData, setPixChargeData] = useState(null);
+      const [isCreatingPixCharge, setIsCreatingPixCharge] = useState(false);
     
       const fetchBetDetails = useCallback(async () => {
         setLoading(true);
@@ -77,21 +83,73 @@
           toast({ variant: "destructive", title: "Valor Inválido", description: `O valor mínimo da aposta é R$ ${bet?.entry_fee.toFixed(2)}.` });
           return;
         }
-        if (!user?.pix_key && paymentMethod === 'PIX') {
-            toast({
-                variant: "destructive",
-                title: "Chave PIX Necessária",
-                description: "Você precisa cadastrar uma chave PIX no seu perfil para apostar com PIX.",
-            });
-            navigate('/perfil');
-            return;
-        }
-    
-        const success = await placeBet(betId, selectedOptionValue, parseFloat(betAmount), paymentMethod);
-        if (success) {
-          const selectedOptionLabel = bet.options.find(opt => opt.value === selectedOptionValue)?.name || selectedOptionValue;
-          toast({ title: "Aposta Realizada!", description: `Sua aposta em ${selectedOptionLabel} foi registrada.` });
-          fetchBetDetails(); 
+        
+        if (paymentMethod === 'PIX') {
+            if (!user?.pix_key) { 
+                toast({
+                    variant: "destructive",
+                    title: "Chave PIX Necessária",
+                    description: "Você precisa cadastrar uma chave PIX no seu perfil para apostar com PIX.",
+                });
+                navigate('/perfil');
+                return;
+            }
+
+            setIsCreatingPixCharge(true);
+            setPixChargeData(null); 
+            try {
+                const { data: chargeResponse, error: invokeError } = await supabase.functions.invoke('create-pix-charge', {
+                    body: JSON.stringify({ 
+                        amount: parseFloat(betAmount), 
+                        userId: user.id, 
+                        betId: betId,
+                        description: `Aposta: ${bet.title}`,
+                        payerName: user.name || user.email,
+                        payerCpf: user.pix_key_type === 'cpf' ? user.pix_key : undefined 
+                    })
+                });
+
+                if (invokeError) throw invokeError;
+                if (chargeResponse.error) throw new Error(chargeResponse.error.message || chargeResponse.error);
+
+                setPixChargeData(chargeResponse);
+                
+                const { data: paymentLog, error: logError } = await supabase
+                    .from('pagamentos')
+                    .insert({
+                        aposta_id: betId,
+                        tipo: 'entrada_aposta_pix',
+                        status: 'pendente',
+                        valor_enviado: parseFloat(betAmount),
+                        txid_efi: chargeResponse.txid,
+                        data_criacao: new Date().toISOString(),
+                        data_ultima_atualizacao: new Date().toISOString(),
+                    })
+                    .select('id')
+                    .single();
+
+                if (logError) {
+                    console.error('Erro ao registrar pagamento pendente:', logError);
+                    toast({ variant: "destructive", title: "Erro Interno", description: "Falha ao registrar o início do pagamento." });
+                } else {
+                    setPixChargeData({...chargeResponse, paymentLogId: paymentLog.id });
+                    setShowPixModal(true);
+                }
+
+            } catch (err) {
+                console.error('Error creating PIX charge:', err);
+                toast({ variant: "destructive", title: "Erro ao Gerar PIX", description: err.message || "Não foi possível iniciar o pagamento PIX." });
+            } finally {
+                setIsCreatingPixCharge(false);
+            }
+
+        } else { // Pagamento com "Dinheiro" (manual)
+            const success = await placeBet(betId, selectedOptionValue, parseFloat(betAmount), paymentMethod);
+            if (success) {
+              const selectedOptionLabel = bet.options.find(opt => opt.value === selectedOptionValue)?.name || selectedOptionValue;
+              toast({ title: "Aposta Registrada!", description: `Sua aposta em ${selectedOptionLabel} (Dinheiro) foi registrada como pendente.` });
+              fetchBetDetails(); 
+            }
         }
       };
     
@@ -124,9 +182,36 @@
       const handleOpenShareModal = () => {
         setShowShareModal(true);
       };
+
+      const handlePixPaymentSuccess = async () => {
+         toast({ title: "Pagamento PIX Confirmado!", description: "Sua participação na aposta foi registrada." });
+         
+         const { error: insertApostadorError } = await supabase
+            .from('apostadores')
+            .insert({
+                aposta_id: betId,
+                usuario_id: user.id,
+                selected_option: selectedOptionValue, 
+                valor_apostado: parseFloat(betAmount),
+                status: 'pago',
+                metodo_pagamento: 'PIX',
+                data_aposta: new Date().toISOString(),
+            });
+
+        if (insertApostadorError) {
+            console.error("Error inserting apostador after PIX success:", insertApostadorError);
+            toast({ variant: "destructive", title: "Erro ao Registrar Aposta", description: "O pagamento foi confirmado, mas houve um erro ao registrar sua participação." });
+        } else {
+             if (pixChargeData?.paymentLogId) {
+                await supabase.from('pagamentos').update({ apostador_id: user.id }).eq('id', pixChargeData.paymentLogId);
+             }
+        }
+         setShowPixModal(false);
+         fetchBetDetails();
+      };
     
-      if (loading || contextLoading) {
-        return <LoadingBetDetail />;
+      if (loading || contextLoading || isCreatingPixCharge) {
+        return <LoadingBetDetail message={isCreatingPixCharge ? "Processando pagamento PIX..." : undefined} />;
       }
     
       if (error) {
@@ -157,7 +242,7 @@
           
       const isManager = user?.id === bet.created_by;
       const canPlaceBet = bet.status === 'Aberta' && new Date(bet.close_date) > new Date();
-      const hasUserAlreadyBet = bet.apostadores?.some(p => p.usuario_id === user?.id);
+      const hasUserAlreadyBet = bet.apostadores?.some(p => p.usuario_id === user?.id && p.status === 'pago'); // Considera apenas apostas pagas
       const betOptionsForActions = bet.options?.map(opt => ({ label: opt.name, value: opt.value })) || [];
     
       return (
@@ -185,7 +270,7 @@
                   onAmountChange={setBetAmount}
                   minAmount={bet.entry_fee}
                   onPlaceBet={handlePlaceBet}
-                  isPlacingBet={contextLoading || loading} 
+                  isPlacingBet={contextLoading || loading || isCreatingPixCharge} 
                   canStillBet={canPlaceBet}
                   userPixKey={user?.pix_key}
                   onNavigateToProfile={() => navigate('/perfil')}
@@ -195,7 +280,7 @@
                  <Alert variant="default" className="bg-green-500/10 border-green-500/30 text-green-700 dark:text-green-500">
                     <Terminal className="h-4 w-4" />
                     <AlertTitle>Aposta Registrada!</AlertTitle>
-                    <AlertDescription>Você já participou deste bolão. Boa sorte!</AlertDescription>
+                    <AlertDescription>Você já participou deste bolão e seu pagamento foi confirmado. Boa sorte!</AlertDescription>
                 </Alert>
               )}
               {!isAuthenticated && canPlaceBet && (
@@ -250,6 +335,19 @@
               isPrivate={!bet.is_public}
               accessCode={bet.private_access_code}
             />
+          )}
+
+          {showPixModal && pixChargeData && (
+             <PixPaymentModal
+                isOpen={showPixModal}
+                onClose={() => setShowPixModal(false)}
+                betTitle={bet.title}
+                chargeData={pixChargeData}
+                onPaymentSuccess={handlePixPaymentSuccess}
+                betId={betId}
+                userId={user?.id}
+                selectedOption={selectedOptionValue}
+             />
           )}
         </div>
       );

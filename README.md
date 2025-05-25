@@ -336,5 +336,4 @@
     ---
 
     Este handover deve fornecer uma base sólida para continuar o desenvolvimento do PAGOUL!. Se tiver dúvidas, consulte a documentação das tecnologias utilizadas e o código existente. Boa sorte!
-  #   h o r i z o n s - e x p o r t - 1 5 d 5 b 7 b 4 - 6 c 0 b - 4 9 a 1 - a 1 1 7 - 0 5 e 4 a 2 b 8 8 6 4 6  
- 
+  

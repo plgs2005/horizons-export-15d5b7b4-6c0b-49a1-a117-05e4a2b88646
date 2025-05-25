@@ -1,12 +1,12 @@
 
-    import React, { useState, useEffect } from 'react';
+    import React, { useState, useEffect, useCallback } from 'react';
     import { useBets } from '@/contexts/BetContext.jsx';
     import AdminBetList from '@/components/admin/AdminBetList.jsx';
     import { motion } from 'framer-motion';
     import { AlertCircle, Loader2, PlusCircle } from 'lucide-react';
     import { Button } from '@/components/ui/button';
     import { useNavigate } from 'react-router-dom';
-    import BetFormModal from '@/components/admin/BetFormModal.jsx'; // Assume this component will be created
+    import BetFormModal from '@/components/admin/BetFormModal.jsx'; 
 
     const AdminBetManagement = () => {
       const { bets, loadingBets, fetchBets, deleteBet } = useBets();
@@ -14,9 +14,13 @@
       const [isModalOpen, setIsModalOpen] = useState(false);
       const [editingBet, setEditingBet] = useState(null);
 
-      useEffect(() => {
-        fetchBets(); // Fetch on component mount if not already loaded
+      const loadAllBets = useCallback(() => {
+        fetchBets({}); // Pass empty filter to fetch all bets
       }, [fetchBets]);
+
+      useEffect(() => {
+        loadAllBets();
+      }, [loadAllBets]);
 
       const handleEditBet = (bet) => {
         setEditingBet(bet);
@@ -24,9 +28,7 @@
       };
 
       const handleDeleteBet = async (betId) => {
-        // Confirmation dialog could be added here
         await deleteBet(betId);
-        // Toast notification is handled within deleteBet context function
       };
 
       const openCreateModal = () => {
@@ -70,13 +72,13 @@
             />
           )}
           
-          {/* Modal for Creating/Editing Bets - if we decide to use a modal over a separate page */}
           {isModalOpen && (
             <BetFormModal 
               isOpen={isModalOpen} 
               onClose={() => {
                 setIsModalOpen(false);
                 setEditingBet(null);
+                loadAllBets(); // Refresh list after modal close
               }} 
               bet={editingBet} 
             />

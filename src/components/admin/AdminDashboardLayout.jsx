@@ -1,7 +1,7 @@
 
     import React from 'react';
-    import { NavLink, Outlet } from 'react-router-dom';
-    import { LayoutDashboard, Users, ListChecks, Settings, BarChart3, BellDot, LogOut } from 'lucide-react';
+    import { NavLink } from 'react-router-dom';
+    import { LayoutDashboard, Users, ListChecks, Settings, BarChart3, BellDot, LogOut, TerminalSquare } from 'lucide-react';
     import { useAuth } from '@/contexts/AuthContext';
     import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
     import { Button } from '@/components/ui/button';
@@ -9,7 +9,7 @@
     const AdminSidebarLink = ({ to, icon: Icon, label }) => (
       <NavLink
         to={to}
-        end // Use 'end' for exact matching of parent routes like '/admin' for overview
+        end={to === "/admin"} // Use 'end' for exact matching of parent routes like '/admin' for overview
         className={({ isActive }) =>
           `flex items-center px-4 py-3 rounded-lg text-sm font-medium transition-colors
            ${isActive 
@@ -23,16 +23,18 @@
       </NavLink>
     );
 
-    const AdminDashboardLayout = ({ children }) => {
+    const AdminDashboardLayout = ({ children, pageTitle }) => {
       const { user, logout } = useAuth();
 
       const getAvatarFallback = (name) => {
         if (!name) return "A";
         const parts = name.split(" ");
-        if (parts.length > 1) {
+        if (parts.length > 1 && parts[0] && parts[parts.length -1]) {
           return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
         }
-        return name.substring(0, 2).toUpperCase();
+        if (name && name.length >=2) return name.substring(0, 2).toUpperCase();
+        if (name && name.length === 1) return name.toUpperCase();
+        return "AD";
       };
 
       return (
@@ -61,6 +63,7 @@
               <AdminSidebarLink to="/admin/reports" icon={BarChart3} label="Relatórios" />
               <AdminSidebarLink to="/admin/notifications" icon={BellDot} label="Notificações" />
               <AdminSidebarLink to="/admin/settings" icon={Settings} label="Configurações" />
+              <AdminSidebarLink to="/admin/terminal" icon={TerminalSquare} label="Terminal" />
             </nav>
 
             <div className="p-4 mt-auto border-t border-slate-700">
@@ -74,13 +77,10 @@
           {/* Main Content */}
           <div className="flex-1 flex flex-col overflow-hidden">
             <header className="bg-white dark:bg-slate-800 shadow-sm p-4">
-              {/* Pode adicionar breadcrumbs ou título da página aqui */}
-              <h1 className="text-xl font-semibold text-slate-800 dark:text-slate-100">Painel Administrativo</h1>
+              <h1 className="text-xl font-semibold text-slate-800 dark:text-slate-100">{pageTitle || 'Painel Administrativo'}</h1>
             </header>
             <main className="flex-1 overflow-x-hidden overflow-y-auto bg-slate-100 dark:bg-slate-900 p-6">
               {children} 
-              {/* Se estiver usando rotas aninhadas, Outlet será renderizado aqui */}
-              {/* <Outlet /> */} 
             </main>
           </div>
         </div>
